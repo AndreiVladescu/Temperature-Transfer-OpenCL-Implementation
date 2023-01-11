@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "_OpenCLUtil.h"
 
@@ -18,7 +19,7 @@ static unsigned int dbg_counter = 0;
 #define NEUTRAL 0	 // GRAY
 #define CHILLY -1	 // CYAN
 #define COLD -2		 // BLUE
-#define VERY_COLD -3 // MAGENTA
+#define VERY_COLD -3 // PURPLE
 
 /* Matrix struct for program */
 typedef struct FluidComputingMatrix
@@ -35,14 +36,15 @@ typedef struct FluidComputingMatrix
 	double *next_matrix;
 	// Cell type matrix - fluid, non-fluid, etc
 	char *type_matrix;
-
+	// Decay rate - percent at which the temperature decays per iteration
+	double decay_rate;
 } FluidComputingMatrix;
 
 typedef struct TemperatureColorArray
 {
-	int min_value, max_value;
+	double min_value, max_value;
 	// Color thresholding
-	int orange_th, yellow_th, cyan_th, blue_th;
+	double orange_th, yellow_th, cyan_th, blue_th;
 } TemperatureColorArray;
 
 FluidComputingMatrix *matrix;
@@ -72,6 +74,18 @@ void update_matrix(FluidComputingMatrix *self)
 			self->curr_matrix[temp_index] = self->next_matrix[temp_index];
 		}
 	}
+}
+
+/// @brief Applies decay to the matrix
+/// @param self
+decay_temperature(FluidComputingMatrix *self)
+{
+	for (int i = 0; i < self->dim[0]; i++)
+		for (int j = 0; j < self->dim[1]; j++)
+		{
+			int temp_index = self->dim[1] * i + j;
+			self->curr_matrix[temp_index] -= self->curr_matrix[temp_index] * self->decay_rate;
+		}
 }
 
 /// @brief Allocates memory for FluidComputingMatrix pointer
@@ -290,6 +304,7 @@ int setup_iteration(size_t *worker_group_size)
 
 	return 0;
 }
+
 /// @brief Prints out the current iteration matrix
 /// @param self the FluidComputingMatrix pointer
 void print_current_matrix(FluidComputingMatrix *self)
@@ -305,6 +320,16 @@ void print_current_matrix(FluidComputingMatrix *self)
 	}
 }
 
+/// @brief Prints color thresholds
+void print_color_thresholds()
+{
+	printf("%lf %lf %lf %lf %lf %lf\n", color_array.max_value,
+		   color_array.orange_th, color_array.yellow_th,
+		   color_array.cyan_th, color_array.blue_th, color_array.min_value);
+}
+
+/// @brief Colors the matrix and prints it
+/// @param self
 void color_matrix(FluidComputingMatrix *self)
 {
 	for (int j = 0; j < self->dim[1]; j++)
@@ -312,14 +337,14 @@ void color_matrix(FluidComputingMatrix *self)
 		for (int i = 0; i < self->dim[0]; i++)
 		{
 			int temp_index = i * self->dim[1] + j;
-			if (self->curr_matrix[temp_index] > color_array.orange_th)
+			if (self->curr_matrix[temp_index] >= -0.000001 && self->curr_matrix[temp_index] <= 0.000001)
+				print_colored_cell(NEUTRAL);
+			else if (self->curr_matrix[temp_index] > color_array.orange_th)
 				print_colored_cell(VERY_HOT);
 			else if (self->curr_matrix[temp_index] > color_array.yellow_th)
 				print_colored_cell(HOT);
 			else if (self->curr_matrix[temp_index] > 0)
 				print_colored_cell(WARM);
-			else if (self->curr_matrix[temp_index] == 0)
-				print_colored_cell(NEUTRAL);
 			else if (self->curr_matrix[temp_index] > color_array.cyan_th)
 				print_colored_cell(CHILLY);
 			else if (self->curr_matrix[temp_index] > color_array.blue_th)
@@ -332,36 +357,41 @@ void color_matrix(FluidComputingMatrix *self)
 	printf("\n");
 }
 
+/// @brief Prints out the color of a cell
+/// @param color
 void print_colored_cell(int color)
 {
 	switch (color)
 	{
 	case VERY_HOT:
-		printf("\033[1;31m# \033[0m");
+		printf("\033[1;31m#\t\033[0m");
 		break;
 	case HOT:
-		printf("\033[38;2;216;128;0m# \033[0m");
+		printf("\033[38;2;216;128;0m#\t\033[0m");
 		break;
 	case WARM:
-		printf("\033[1;33m# \033[0m");
+		printf("\033[1;33m#\t\033[0m");
 		break;
 	case NEUTRAL:
-		printf("\033[38;5;7m# \033[0m");
+		printf("\033[38;5;7m#\t\033[0m");
 		break;
 	case CHILLY:
-		printf("\033[1;36m# \033[0m");
+		printf("\033[1;36m#\t\033[0m");
 		break;
 	case COLD:
-		printf("\033[1;34m# \033[0m");
+		printf("\033[1;34m#\t\033[0m");
 		break;
 	case VERY_COLD:
-		printf("\033[1;35m# \033[0m");
+		printf("\033[38;5;92m#\t\033[0m");
 		break;
 	default:
 		break;
 	}
 }
 
+/// @brief Initialises color values for the current maxima and minima
+/// @param self_matrix
+/// @param self_color
 void init_color(FluidComputingMatrix *self_matrix, TemperatureColorArray *self_color)
 {
 
@@ -411,10 +441,14 @@ int main(int argc, char **argv)
 	kernel = getAndCompileKernel("homework.cl", "temperature_calculations", context, deviceid);
 
 	allocate_device_memory();
-
+	matrix->decay_rate = 0.02;
 	init_color(matrix, &color_array);
 
-	for (int epoch = 0; epoch < matrix->iterations; epoch++)
+	printf("\n\nInitial Temperature Matrix:\n\n");
+
+	color_matrix(matrix);
+	print_current_matrix(matrix);
+	for (int iteration = 0; iteration < matrix->iterations; iteration++)
 	{
 		if (setup_iteration(&worker_group_size))
 		{
@@ -433,6 +467,10 @@ int main(int argc, char **argv)
 		handleError(rc, __LINE__, __FILE__);
 
 		update_matrix(matrix);
+		decay_temperature(matrix);
+
+		_sleep(1000);
+		printf("\n\nIteration %d:\n\n", iteration + 1);
 		color_matrix(matrix);
 	}
 
@@ -441,7 +479,7 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
-	// print_current_matrix(matrix);
+	print_current_matrix(matrix);
 
 	cleanup_device();
 	cleanup();
