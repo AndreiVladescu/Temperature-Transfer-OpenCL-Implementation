@@ -12,6 +12,14 @@ static unsigned int dbg_counter = 0;
 		dbg_counter++;                                                             \
 	}
 
+#define VERY_HOT 3	 // RED
+#define HOT 2		 // ORANGE
+#define WARM 1		 // YELLOW
+#define NEUTRAL 0	 // GRAY
+#define CHILLY -1	 // CYAN
+#define COLD -2		 // BLUE
+#define VERY_COLD -3 // MAGENTA
+
 /* Matrix struct for program */
 typedef struct FluidComputingMatrix
 {
@@ -30,7 +38,15 @@ typedef struct FluidComputingMatrix
 
 } FluidComputingMatrix;
 
+typedef struct TemperatureColorArray
+{
+	int min_value, max_value;
+	// Color thresholding
+	int orange_th, yellow_th, cyan_th, blue_th;
+} TemperatureColorArray;
+
 FluidComputingMatrix *matrix;
+TemperatureColorArray color_array;
 
 /* OpenCL stuff*/
 cl_context context;
@@ -274,6 +290,101 @@ int setup_iteration(size_t *worker_group_size)
 
 	return 0;
 }
+/// @brief Prints out the current iteration matrix
+/// @param self the FluidComputingMatrix pointer
+void print_current_matrix(FluidComputingMatrix *self)
+{
+	for (int j = 0; j < self->dim[1]; j++)
+	{
+		for (int i = 0; i < self->dim[0]; i++)
+		{
+			int temp_index = i * self->dim[1] + j;
+			printf("%lf ", self->curr_matrix[temp_index]);
+		}
+		printf("\n");
+	}
+}
+
+void color_matrix(FluidComputingMatrix *self)
+{
+	for (int j = 0; j < self->dim[1]; j++)
+	{
+		for (int i = 0; i < self->dim[0]; i++)
+		{
+			int temp_index = i * self->dim[1] + j;
+			if (self->curr_matrix[temp_index] > color_array.orange_th)
+				print_colored_cell(VERY_HOT);
+			else if (self->curr_matrix[temp_index] > color_array.yellow_th)
+				print_colored_cell(HOT);
+			else if (self->curr_matrix[temp_index] > 0)
+				print_colored_cell(WARM);
+			else if (self->curr_matrix[temp_index] == 0)
+				print_colored_cell(NEUTRAL);
+			else if (self->curr_matrix[temp_index] > color_array.cyan_th)
+				print_colored_cell(CHILLY);
+			else if (self->curr_matrix[temp_index] > color_array.blue_th)
+				print_colored_cell(COLD);
+			else
+				print_colored_cell(VERY_COLD);
+		}
+		printf("\n\n");
+	}
+	printf("\n");
+}
+
+void print_colored_cell(int color)
+{
+	switch (color)
+	{
+	case VERY_HOT:
+		printf("\033[1;31m# \033[0m");
+		break;
+	case HOT:
+		printf("\033[38;2;216;128;0m# \033[0m");
+		break;
+	case WARM:
+		printf("\033[1;33m# \033[0m");
+		break;
+	case NEUTRAL:
+		printf("\033[38;5;7m# \033[0m");
+		break;
+	case CHILLY:
+		printf("\033[1;36m# \033[0m");
+		break;
+	case COLD:
+		printf("\033[1;34m# \033[0m");
+		break;
+	case VERY_COLD:
+		printf("\033[1;35m# \033[0m");
+		break;
+	default:
+		break;
+	}
+}
+
+void init_color(FluidComputingMatrix *self_matrix, TemperatureColorArray *self_color)
+{
+
+	double min = self_matrix->curr_matrix[0];
+	double max = self_matrix->curr_matrix[0];
+	for (int i = 1; i < self_matrix->dim[0] * self_matrix->dim[1]; i++)
+	{
+		if (self_matrix->curr_matrix[i] < min)
+		{
+			min = self_matrix->curr_matrix[i];
+		}
+		if (self_matrix->curr_matrix[i] > max)
+		{
+			max = self_matrix->curr_matrix[i];
+		}
+	}
+	self_color->orange_th = max * 2 / 3;
+	self_color->yellow_th = max * 1 / 3;
+	self_color->cyan_th = min * 1 / 3;
+	self_color->blue_th = min * 2 / 3;
+	self_color->min_value = min;
+	self_color->max_value = max;
+}
 
 int main(int argc, char **argv)
 {
@@ -301,6 +412,8 @@ int main(int argc, char **argv)
 
 	allocate_device_memory();
 
+	init_color(matrix, &color_array);
+
 	for (int epoch = 0; epoch < matrix->iterations; epoch++)
 	{
 		if (setup_iteration(&worker_group_size))
@@ -320,12 +433,15 @@ int main(int argc, char **argv)
 		handleError(rc, __LINE__, __FILE__);
 
 		update_matrix(matrix);
+		color_matrix(matrix);
 	}
 
 	if (store_results(argv[2]))
 	{
 		return -1;
 	}
+
+	// print_current_matrix(matrix);
 
 	cleanup_device();
 	cleanup();
